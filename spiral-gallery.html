@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D 螺旋图片墙</title>
+    <style>
+        * { margin: 0; padding: 0; overflow: hidden; }
+        body { background: #0a0a1a; }
+        canvas { display: block; }
+        .tip {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.25);
+            font: 14px sans-serif;
+            letter-spacing: 2px;
+            background: rgba(0,0,0,0.4);
+            padding: 6px 18px;
+            border-radius: 20px;
+            backdrop-filter: blur(4px);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #loaderHud {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            padding: 8px 14px;
+            background: rgba(10, 14, 40, 0.72);
+            border: 1px solid rgba(136, 170, 255, 0.35);
+            border-radius: 12px;
+            backdrop-filter: blur(6px);
+            color: #cfe1ff;
+            font-size: 13px;
+            font-family: inherit;
+            pointer-events: none;
+            z-index: 20;
+            min-width: 160px;
+            line-height: 1.6;
+        }
+        #loaderHud .bar {
+            height: 5px;
+            background: rgba(255,255,255,0.12);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        #loaderHud .bar > div {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg,#6ab0ff,#a974ff);
+            transition: width .3s ease;
+        }
+        #loaderHud.done { border-color: rgba(120,255,180,0.45); color: #c7ffd7; }
+    </style>
+</head>
+<body>
+    <div class="tip">✦ 鼠标拖拽/手指滑动 · 滚轮/双指缩放 ✦</div>
+    <div id="loaderHud">
+            <div>图片加载进度：<span id="loaderOk">0</span> / <span id="loaderTotal">0</span></div>
+            <div style="font-size:11px;opacity:.65">失败：<span id="loaderFail">0</span></div>
+            <div class="bar"><div id="loaderBar"></div></div>
+        </div>
+
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // ============================================================
+        //  1. 配置区域 —— 在这里填入你的图片链接！
+        // ============================================================
+        // 注意：本地图片请使用相对路径（如 './images/01.jpg'），
+        // 或者使用网络图片链接（需支持跨域）。
+        const IMAGE_URLS = [
+            './img03.jpg', './img04.jpg', './img05.jpg',
+            './img06.jpg', './img07.jpg', './img08.jpg', './img09.jpg', './img10.jpg',
+            './img11.jpg', './img12.jpg', './img13.jpg', './img14.jpg', './img15.jpg',
+            './img16.jpg', './img17.jpg', './img18.jpg', './img19.jpg', './img20.jpg',
+            './img21.jpg', './img22.jpg', './img23.jpg', './img24.jpg', './img25.jpg',
+            './img26.jpg', './img27.jpg', './img28.jpg', './img29.jpg', './img30.jpg',
+            './img31.jpg', './img32.jpg', './img33.jpg', './img34.jpg', './img35.jpg',
+            './img36.jpg', './img37.jpg', './img38.jpg', './img39.jpg', './img40.jpg',
+            './img41.jpg', './img42.jpg', './img43.jpg', './img44.jpg', './img45.jpg',
+            './img46.jpg', './img47.jpg', './img48.jpg', './img49.jpg', './img50.jpg',
+            './img51.jpg', './img52.jpg', './img53.jpg',
+        ];
+
+        // 螺旋参数
+        const CONFIG = {
+            radius: 6,          // 螺旋半径
+            height: 14,         // 总高度（螺旋拉伸长度）
+            turns: 5,           // 旋转圈数
+            imageScale: 1.2,    // 图片显示大小
+            autoRotateSpeed: 0.06, // 自动旋转速度
+        };
+
+        // ============================================================
+        //  2. 场景 / 相机 / 渲染器
+        // ============================================================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a1a);
+
+        // 根据屏幕判断初始相机位置（适配横竖屏）
+        const isMobile = window.innerWidth < 768;
+        const camera = new THREE.PerspectiveCamera(isMobile ? 60 : 50, window.innerWidth / window.innerHeight, 0.1, 200);
+        if (isMobile) { // 如果是手机端
+            camera.position.set(0, 6, 24); // 拉远一点，看全整个螺旋
+        } else { // PC端/平板
+            camera.position.set(0, 4, 18);
+        }
+        camera.updateProjectionMatrix();
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        renderer.toneMappingExposure = 1.5;
+        document.body.appendChild(renderer.domElement);
+
+        // ============================================================
+        //  3. 轨道控制器（可拖拽查看）
+        // ============================================================
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = false;
+        controls.target.set(0, 0, 0);
+        controls.minDistance = 3;
+        controls.maxDistance = 50; // 稍微放宽限制，方便手机上捏合缩放
+
+        // ============================================================
+        //  4. 核心：构建螺旋图片墙
+        // ============================================================
+        const galleryGroup = new THREE.Group();
+        scene.add(galleryGroup);
+
+        // 右上角 HUD 计数器
+        const hud = {
+            root: document.getElementById('loaderHud'),
+            okEl: document.getElementById('loaderOk'),
+            failEl: document.getElementById('loaderFail'),
+            totalEl: document.getElementById('loaderTotal'),
+            barEl: document.getElementById('loaderBar'),
+            total: 0, ok: 0, fail: 0,
+            refresh() {
+                this.okEl.textContent = this.ok;
+                this.failEl.textContent = this.fail;
+                this.totalEl.textContent = this.total;
+                const pct = this.total > 0 ? Math.round(((this.ok + this.fail) / this.total) * 100) : 0;
+                this.barEl.style.width = pct + '%';
+                if (this.ok + this.fail >= this.total && this.total > 0) {
+                    this.root.classList.add('done');
+                    setTimeout(() => { if (this.fail === 0) this.root.style.opacity = 0.4; }, 3000);
+                }
+            }
+        };
+
+        // 自定义纹理加载器：使用 <img> DOM 元素加载，绕过 XMLHttpRequest，
+        // 这样 file:// 协议（直接双击 HTML）也能读取本地图片
+        function loadTexture(url, onSuccess, onError) {
+            const img = new Image();
+            img.onload = () => {
+                const tex = new THREE.Texture(img);
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.minFilter = THREE.LinearFilter;
+                tex.magFilter = THREE.LinearFilter;
+                tex.wrapS = THREE.ClampToEdgeWrapping;
+                tex.wrapT = THREE.ClampToEdgeWrapping;
+                tex.needsUpdate = true;
+                hud.ok++; hud.refresh();
+                onSuccess(tex);
+            };
+            img.onerror = (e) => { hud.fail++; hud.refresh(); onError && onError(e); };
+            img.src = url;
+        }
+
+        // 存储所有精灵，以便后续做流动动画（如果需要）
+        const sprites = [];
+
+        const totalImages = IMAGE_URLS.length;
+        const totalSlots = 60; // 总槽位数（图片不够就循环使用）
+        hud.total = totalSlots;
+        hud.refresh();
+
+        for (let i = 0; i < totalSlots; i++) {
+            // 计算螺旋位置
+            const t = i / totalSlots;
+            const angle = t * Math.PI * 2 * CONFIG.turns;
+            const y = (t - 0.5) * CONFIG.height;
+            const r = CONFIG.radius * (1 - t * 0.15); // 稍微收拢，更有层次
+
+            const x = r * Math.cos(angle);
+            const z = r * Math.sin(angle);
+
+            // 选择图片（循环使用）
+            const imgIndex = i % totalImages;
+            const url = IMAGE_URLS[imgIndex];
+
+            // 创建 Sprite（始终面向相机）——先给一个可见的默认色，保证加载失败/阻塞时也能看到
+            const material = new THREE.SpriteMaterial({
+                color: new THREE.Color().setHSL((imgIndex / totalImages) * 0.8, 0.6, 0.55),
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.NormalBlending,
+                opacity: 0.92,
+            });
+
+            // 用 <img> DOM 方式加载纹理（file:// 也能用）；成功后替换为真实图片
+            loadTexture(
+                url,
+                (tex) => { material.map = tex; material.color.set(0xffffff); material.needsUpdate = true; },
+                (err) => { console.warn('纹理加载失败，保留彩色占位:', url); }
+            );
+
+            const sprite = new THREE.Sprite(material);
+            sprite.position.set(x, y, z);
+            
+            // 根据距离中心远近微调大小，产生景深感
+            const scaleFactor = CONFIG.imageScale * (0.9 + 0.2 * (1 - Math.abs(t - 0.5) * 2));
+            sprite.scale.set(scaleFactor, scaleFactor, 1);
+
+            // 存储额外的属性，方便流动动画
+            sprite.userData = {
+                baseAngle: angle,
+                baseRadius: r,
+                baseY: y,
+                t: t,
+                offset: Math.random() * 100, // 随机相位
+            };
+
+            galleryGroup.add(sprite);
+            sprites.push(sprite);
+        }
+
+        console.log(`✅ 已生成 ${totalSlots} 个图片精灵，共使用 ${totalImages} 张不同图片`);
+
+        // ============================================================
+        //  5. 氛围点缀：背景粒子 + 中心光晕
+        // ============================================================
+        // 5.1 粒子背景
+        // 手机端粒子减半，避免掉帧
+        const particleCount = (typeof isMobile !== 'undefined' ? isMobile : window.innerWidth < 768) ? 800 : 2000;
+        const particleGeo = new THREE.BufferGeometry();
+        const particlePos = new Float32Array(particleCount * 3);
+        for (let i = 0; i < particleCount; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const r = 8 + 20 * Math.random();
+            particlePos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            particlePos[i*3+1] = (Math.random() - 0.5) * 30;
+            particlePos[i*3+2] = r * Math.sin(phi) * Math.sin(theta);
+        }
+        particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
+        const particleMat = new THREE.PointsMaterial({
+            color: 0x4488ff,
+            size: 0.12,
+            transparent: true,
+            opacity: 0.4,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        const particles = new THREE.Points(particleGeo, particleMat);
+        scene.add(particles);
+
+        // 5.2 中心发光球
+        const centerGlow = new THREE.Mesh(
+            new THREE.SphereGeometry(0.3, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0x88ccff })
+        );
+        scene.add(centerGlow);
+        const glowRing = new THREE.Mesh(
+            new THREE.RingGeometry(0.5, 0.8, 32),
+            new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+        );
+        glowRing.rotation.x = Math.PI / 2;
+        scene.add(glowRing);
+
+        // ============================================================
+        //  6. 后期特效：Bloom 泛光（让图片边缘发光，氛围感拉满）
+        // ============================================================
+        const composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            0.3,   // strength（调低一点，避免图片过曝）
+            0.3,   // radius
+            0.1    // threshold
+        );
+        composer.addPass(bloomPass);
+
+        // ============================================================
+        //  7. 动画循环
+        // ============================================================
+        const clock = new THREE.Clock();
+
+        function animate() {
+            const elapsed = clock.getElapsedTime();
+
+            // 整体自动旋转
+            galleryGroup.rotation.y = elapsed * CONFIG.autoRotateSpeed;
+
+            // 中心光晕呼吸效果
+            centerGlow.scale.setScalar(1 + 0.2 * Math.sin(elapsed * 1.2));
+            glowRing.scale.setScalar(1 + 0.3 * Math.sin(elapsed * 0.8 + 1));
+            glowRing.rotation.z = elapsed * 0.1;
+
+            // 粒子缓慢飘动
+            particles.rotation.y = elapsed * 0.005;
+
+            // （可选）图片微弱的上下浮动，更有生机
+            sprites.forEach((sprite, index) => {
+                const offset = sprite.userData.offset || 0;
+                const floatY = Math.sin(elapsed * 0.5 + offset) * 0.04;
+                // 注意：如果做了浮动，需要保存基准 y，但我们这里为了简单，直接在原有基础上加
+                // 但是由于我们已经设置了 position，可以直接修改
+                // 更好的方式：在 userData 存 baseY，这里就不展开了，保持静态也很优雅
+            });
+
+            // 更新控制器
+            controls.update();
+
+            // 使用 composer 渲染
+            composer.render();
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+
+        // ============================================================
+        //  8. 窗口自适应
+        // ============================================================
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const mob = w < 768;
+            // 横竖屏/双端切换时同步更新相机 FOV 与初始观察距离，避免拉伸变形
+            camera.fov = mob ? 60 : 50;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+            composer.setSize(w, h);
+            controls.minDistance = 3;
+            controls.maxDistance = 50;
+        });
+
+        // 提示
+        console.log('🖼️ 3D 螺旋图片墙已启动！');
+        console.log('💡 提示：修改 IMAGE_URLS 数组即可换成你自己的图片。');
+    </script>
+</body>
+</html>
